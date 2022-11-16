@@ -11,6 +11,16 @@ function remote_main()
     exit 0
   fi
 
+  if [[ "$1" =~ -l|--list ]]; then
+    if [[ -f "local_remote_config_file" ]]; then
+      cat "$local_remote_config_file"
+      exit 0
+    else
+      echo "There are no remotes"
+      exit 0
+    fi
+  fi
+
   parse_remote_options "$@"
   if [[ "$?" != 0 ]]; then
     complain "Invalid option: ${options_values['ERROR']}"
@@ -300,5 +310,6 @@ function remote_help()
     '  remote remove <name> - Remove remote' \
     '  remote rename <old> <new> - Rename remote' \
     '  remote --set-default=<remonte-name> - Set default remote' \
-    '  remote (--verbose | -v) - be verbose'
+    '  remote (--verbose | -v) - be verbose' \
+    '  remote (--list | -l) - List all the remotes' 
 }
