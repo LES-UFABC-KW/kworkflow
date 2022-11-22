@@ -33,7 +33,6 @@ function setUp()
   parse_configuration "$KW_CONFIG_SAMPLE"
   parse_configuration "$KW_BUILD_CONFIG_SAMPLE" build_config
   parse_configuration "$KW_DEPLOY_CONFIG_SAMPLE" deploy_config
-  parse_configuration "$KW_VM_CONFIG_SAMPLE" vm_config
 
   # Usually, we call populate_remote_info to fill out remote info. However, to
   # keep the test more reliable, we manually set this values here
@@ -53,7 +52,6 @@ function setUp()
   alias sudo='sudo_mock'
   alias date='date_mock'
   alias generate_tarball='generate_tarball_mock'
-  alias vm_umount='vm_umount_mock'
 
   # Standard configuration makes the below standard commands
   CONFIG_REMOTE='juca@127.0.0.1'
@@ -105,15 +103,6 @@ function setUp()
     "$COPY_KERNEL_IMAGE"
     "$GENERATE_BOOT_TAR_FILE"
     "$SEND_BOOT_FILES_HOST2REMOTE"
-  )
-
-  # Base sequence for VM deploy
-  declare -ga BASE_EXPECTED_CMD_ARM_VM=(
-    "$SENDING_KERNEL_MSG"
-    "$UNDEFINED_CONFIG"
-    "$COPY_KERNEL_IMAGE"
-    "cp -r $LOCAL_TO_DEPLOY_PATH/boot/* ${vm_config[mount_point]}/boot/"
-    'Did you check if your VM is mounted?'
   )
 
   # Base sequence for X86
@@ -315,7 +304,7 @@ function test_check_setup_status()
 
   # 2. Success case
   touch "$REMOTE_KW_DEPLOY/status"
-  check_setup_status 1
+  check_setup_status 2
   assert_equals_helper 'Wrong return value' "($LINENO)" 0 "$?"
 }
 
@@ -488,29 +477,6 @@ function test_compose_copy_source_parameter_for_dtb_any_other_pattern()
   assert_equals_helper 'Expected folder name' "$LINENO" "$expected_result" "$output"
 }
 
-function test_deploy_setup_to_vm()
-{
-  local original="$PWD"
-  local output
-
-  cd "$FAKE_KERNEL" || {
-    fail "($LINENO) It was not possible to move to temporary directory"
-    return
-  }
-
-  output=$(deploy_setup 1 'TEST_MODE')
-  expected=(
-    "guestfish --rw -a /home/xpto/p/virty.qcow2 run :       mount /dev/sda1 / : mkdir-p /opt/kw"
-    "test -f /opt/kw/status"
-  )
-  compare_command_sequence '' "$LINENO" 'expected' "$output"
-
-  cd "$original" || {
-    fail "($LINENO) It was not possible to move back from temp directory"
-    return
-  }
-}
-
 function test_kernel_modules()
 {
   local count=0
@@ -553,7 +519,7 @@ function test_kernel_modules()
 
   exec_module_install="$CONFIG_SSH $CONFIG_REMOTE sudo \"$deploy_remote_cmd\""
 
-  # Test 1: Check modules deploy for a remote
+  # Check modules deploy for a remote
   cp "${SAMPLES_DIR}/.config" "$FAKE_KERNEL"
   cd "$FAKE_KERNEL" || {
     fail "($LINENO) It was not possible to move to temporary directory"
@@ -574,15 +540,7 @@ function test_kernel_modules()
   output=$(modules_install 3 "${to_deploy_path}/${version}.kw.tar" 'TEST_MODE')
   compare_command_sequence '' "$LINENO" 'expected_cmd' "$output"
 
-  # Test 2: Deploy modules to local
-  output=$(modules_install 1 'fake/path' 'TEST_MODE')
-  declare -a expected_cmd=(
-    "$PREPARING_MODULES_MSG"
-    'make INSTALL_MOD_STRIP=1 INSTALL_MOD_PATH=/home/lala modules_install'
-  )
-  compare_command_sequence '' "$LINENO" 'expected_cmd' "$output"
-
-  # Test 3: Deploy modules locally vm
+  # Deploy modules locally
   output=$(modules_install 2 'fake/path' 'TEST_MODE')
   declare -a expected_cmd=(
     "$PREPARING_MODULES_MSG"
@@ -685,7 +643,7 @@ function test_parse_deploy_options()
   assert_equals_helper 'Default LS_LINE did not match expectation' "($LINENO)" '0' "${options_values['LS_LINE']}"
   assert_equals_helper 'Default LS_ALL did not match expectation' "($LINENO)" '' "${options_values['LS_ALL']}"
   assert_equals_helper 'Default MENU_CONFIG did not match expectation' "($LINENO)" 'nconfig' "${options_values['MENU_CONFIG']}"
-  assert_equals_helper 'Default TARGET did not match expectation' "($LINENO)" '1' "${options_values['TARGET']}"
+  assert_equals_helper 'Default TARGET did not match expectation' "($LINENO)" 3 "${options_values['TARGET']}"
 
   # test individual options
   unset options_values
@@ -712,11 +670,6 @@ function test_parse_deploy_options()
   declare -gA options_values
   parse_deploy_options --local
   assert_equals_helper 'Could not set deploy TARGET' "($LINENO)" '2' "${options_values['TARGET']}"
-
-  unset options_values
-  declare -gA options_values
-  parse_deploy_options --vm
-  assert_equals_helper 'Could not set deploy TARGET' "($LINENO)" '1' "${options_values['TARGET']}"
 
   unset options_values
   declare -gA options_values
@@ -905,18 +858,6 @@ function test_collect_target_info_for_deploy()
   # Avoid alias overwrite
   include "$KW_PLUGINS_DIR/kernel_install/bootloader_utils.sh"
   include "$KW_PLUGINS_DIR/kernel_install/utils.sh"
-
-  # Corner-cases
-  alias detect_distro='which_distro_none_mock'
-  output=$(collect_target_info_for_deploy 1 'TEST_MODE')
-  assert_equals_helper 'Wrong return value' "($LINENO)" 95 "$?"
-
-  # VM
-  alias collect_deploy_info='collect_deploy_info_mock'
-  alias detect_distro='detect_distro_arch_mock'
-  collect_target_info_for_deploy 1 'TEST_MODE'
-  assert_equals_helper 'Check bootloader' "($LINENO)" "${target_deploy_info[bootloader]}" 'GRUB'
-  assert_equals_helper 'Check distro' "($LINENO)" "${target_deploy_info[distro]}" 'arch'
 
   # LOCAL
   alias collect_deploy_info='collect_deploy_info_other_mock'
