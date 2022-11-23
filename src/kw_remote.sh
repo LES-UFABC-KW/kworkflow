@@ -52,7 +52,7 @@ function add_new_remote()
 {
   local name
   local remote
-  local first_time=''
+  local first_time=$''
   local host_ssh_config
   local user_ssh_config
   local port_ssh_config
@@ -103,13 +103,26 @@ function add_new_remote()
   fi
 
   # New entry
-  {
-    [[ -n "$first_time" ]] && printf '#kw-default=%s\n' "$name"
-    printf 'Host %s\n' "$name"
-    printf '  Hostname %s\n' "${remote_parameters['REMOTE_IP']}"
-    printf '  Port %s\n' "${remote_parameters['REMOTE_PORT']}"
-    printf '  User %s\n' "${remote_parameters['REMOTE_USER']}"
-  } >> "$local_remote_config_file"
+  
+  if [[ -n "$first_time" ]]; then
+    echo 'Config Created'
+    {
+      printf '#kw-default=%s\n' "$name"
+      printf 'Host %s\n' "$name"
+      printf '  Hostname %s\n' "${remote_parameters['REMOTE_IP']}"
+      printf '  Port %s\n' "${remote_parameters['REMOTE_PORT']}"
+      printf '  User %s\n' "${remote_parameters['REMOTE_USER']}"
+    } > "$local_remote_config_file"
+  else
+    echo 'Saved'
+    {
+        printf '#kw-default=%s\n' "$name"
+        printf 'Host %s\n' "$name"
+        printf '  Hostname %s\n' "${remote_parameters['REMOTE_IP']}"
+        printf '  Port %s\n' "${remote_parameters['REMOTE_PORT']}"
+        printf '  User %s\n' "${remote_parameters['REMOTE_USER']}"
+      } >> "$local_remote_config_file"
+  fi
 }
 
 function set_default_remote()
