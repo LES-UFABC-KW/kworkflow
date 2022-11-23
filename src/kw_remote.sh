@@ -235,7 +235,7 @@ function rename_remote()
 
 function parse_remote_options()
 {
-  local long_options='add,remove,rename,verbose,set-default::'
+  local long_options='add,remove,rename,verbose,set-default:'
   local short_options='v,s'
   local default_option
 
@@ -244,6 +244,11 @@ function parse_remote_options()
   if [[ "$?" != 0 ]]; then
     options_values['ERROR']="$(kw_parse_get_errors 'kw remote' "$short_options" \
       "$long_options" "$@")"
+    return 22 # EINVAL
+  fi
+
+  if [[ "$?" == 22 ]]; then
+    options_values['ERROR']='Something is wrong in the remote option'
     return 22 # EINVAL
   fi
 
@@ -290,7 +295,7 @@ function parse_remote_options()
         echo "VERBOSE"
         shift
         ;;
-      --)
+      --) # End of options, beginning of arguments
         shift
         ;;
       *)
@@ -306,6 +311,9 @@ function parse_remote_options()
     return 22 # EINVAL
   elif [[ "${options_values['DEFAULT_REMOTE']}" == 1 ]]; then
     options_values['ERROR']='Expected a string values after --set-default='
+    return 22
+  elif [[ -z  "${options_values['ADD']}" && -z "${options_values['REMOVE']}" && -z "${options_values['RENAME']}" ]]; then
+    options_values['ERROR']='Please Add, Remove or Rename a remote.'
     return 22
   fi
 }
