@@ -116,7 +116,6 @@ function add_new_remote()
   else
     echo 'Saved'
     {
-        printf '#kw-default=%s\n' "$name"
         printf 'Host %s\n' "$name"
         printf '  Hostname %s\n' "${remote_parameters['REMOTE_IP']}"
         printf '  Port %s\n' "${remote_parameters['REMOTE_PORT']}"
