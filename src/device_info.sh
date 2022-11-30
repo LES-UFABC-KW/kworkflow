@@ -3,7 +3,6 @@
 include "$KW_LIB_DIR/kw_string.sh"
 include "$KW_LIB_DIR/remote.sh"
 include "$KW_LIB_DIR/kwlib.sh"
-include "$KW_LIB_DIR/vm.sh"
 
 declare -gA device_info_data=(['ram']='' # RAM memory in KB
   ['cpu_model']=''                       # CPU model vendor
@@ -14,7 +13,9 @@ declare -gA device_info_data=(['ram']='' # RAM memory in KB
   ['disk_size']=''                       # Disk size in KB
   ['root_path']=''                       # Root directory path
   ['fs_mount']=''                        # Path where root is mounted
-  ['os']=''                              # Operating system name
+  ['os_name']=''                         # Distro's name
+  ['os_version']=''                      # Distro's versios
+  ['os_id_like']=''                      # Distro which this distro is based on
   ['motherboard_name']=''                # Motherboard name
   ['motherboard_vendor']=''              # Motherboard vendor
   ['chassis']=''                         # Chassis type
@@ -57,7 +58,7 @@ function device_info()
 # This function populates the ram element from the device_info_data global
 # variable with the total RAM memory from the target machine in kB.
 #
-# @target Target machine
+# @target Target can be 2 (LOCAL_TARGET) and 3 (REMOTE_TARGET)
 function get_ram()
 {
   local target="$1"
@@ -72,10 +73,6 @@ function get_ram()
   flag=${flag:-'SILENT'}
   cmd="[ -f '/proc/meminfo' ] && cat /proc/meminfo | grep 'MemTotal' | grep -o '[0-9]*'"
   case "$target" in
-    1) # VM_TARGET
-      ram="$(printf '%s\n' "${configurations[qemu_hw_options]}" | sed -r 's/.*-m ?([0-9]+).*/\1/')"
-      ram="$(numfmt --from-unit=M --to-unit=K "$ram")"
-      ;;
     2) # LOCAL_TARGET
       ram=$(cmd_manager "$flag" "$cmd")
       ;;
@@ -113,9 +110,6 @@ function get_cpu()
   cmd_frequency="lscpu | grep MHz | sed -r 's/(CPU.*)/\t\t\1/'"
   cmd_model="lscpu | grep 'Model name:' | sed -r 's/Model name:\s+//g' | cut -d' ' -f1"
   case "$target" in
-    1) #VM_TARGET
-      cpu_model='Virtual'
-      ;;
     2) # LOCAL_TARGET
       cpu_model=$(cmd_manager "$flag" "$cmd_model")
       cpu_frequency=$(cmd_manager "$flag" "$cmd_frequency")
@@ -168,10 +162,6 @@ function get_disk()
   flag=${flag:-'SILENT'}
   cmd="df -h / | tail -n 1 | tr -s ' '"
   case "$target" in
-    1) # VM_TARGET
-      cmd="df -h ${configurations[mount_point]} | tail -n 1 | tr -s ' '"
-      info=$(cmd_manager "$flag" "$cmd")
-      ;;
     2) # LOCAL_TARGET
       info=$(cmd_manager "$flag" "$cmd")
       ;;
@@ -201,27 +191,48 @@ function get_disk()
 function get_os()
 {
   local target="$1"
-  local ip="$2"
-  local port="$3"
-  local os
+  local flag="$2"
+  local ip
+  local port
+  local raw_os_release
+  local root_path
+  local os_release_path='/etc/os-release'
+  local cmd
+  local os_name
+  local os_version
+  local os_id_like
 
   target=${target:-"${device_options['target']}"}
   ip=${ip:-"${device_options['ip']}"}
   port=${port:-"${device_options['port']}"}
+  flag=${flag:-'SILENT'}
 
   case "$target" in
-    1) # VM_TARGET
-      os=$(detect_distro "${configurations[mount_point]}")
-      ;;
     2) # LOCAL_TARGET
-      os=$(detect_distro '/')
+      root_path='/'
+      cmd="cat $(join_path "$root_path" "$os_release_path")"
+      raw_os_release=$(cmd_manager "$flag" "$cmd")
       ;;
     3) # REMOTE_TARGET
-      os=$(which_distro "$ip" "$port")
+      root_path='/'
+      cmd="cat $(join_path "$root_path" "$os_release_path")"
+      raw_os_release=$(cmd_remotely "$cmd" "$flag" "$remote" "$port" '')
       ;;
   esac
+  raw_os_release=$(printf '%s\n' "$raw_os_release" | sed -n -e '/^NAME=/p' -e '/^VERSION=/p' -e '/^ID_LIKE=/p')
+  # the last sed serves to remove the double quotes if present
+  os_name=$(printf '%s\n' "$raw_os_release" | sed -n -E "s/^NAME=//p" | tail -n1 | sed -E "s|^(['\"])(.*)\1$|\2|g")
+  os_version=$(printf '%s\n' "$raw_os_release" | sed -n -E "s/^VERSION=//p" | tail -n1 | sed -E "s|^(['\"])(.*)\1$|\2|g")
+  os_id_like=$(printf '%s\n' "$raw_os_release" | sed -n -E "s/^ID_LIKE=//p" | tail -n1 | sed -E "s|^(['\"])(.*)\1$|\2|g")
 
-  device_info_data['os']="$os"
+  if [[ "$flag" == 'TEST_MODE' ]]; then
+    printf '%s\n' "$cmd"
+    return 0
+  fi
+
+  device_info_data['os_name']="$os_name"
+  device_info_data['os_version']="$os_version"
+  device_info_data['os_id_like']="$os_id_like"
 }
 
 # This function populates the desktop environment variables from the
@@ -247,9 +258,6 @@ function get_desktop_environment()
   cmd="ps -A | grep -v dev | grep -io -E -m1 $ux_regx"
 
   case "$target" in
-    1) # VM_TARGET
-      desktop_env=$(find "${configurations[mount_point]}/usr/share/xsessions" -type f -printf '%f ' | sed -r 's/\.desktop//g')
-      ;;
     2) # LOCAL_TARGET
       desktop_env=$(cmd_manager "$flag" "$cmd")
       ;;
@@ -414,9 +422,6 @@ function get_chassis()
   dmi_cmd='cat /sys/devices/virtual/dmi/id/chassis_type'
 
   case "$target" in
-    1) # VM_TARGET
-      chassis_type=25
-      ;;
     2) # LOCAL_TARGET
       if [[ -f "$dmi_file_path" ]]; then
         chassis_type=$(cmd_manager "$flag" "$dmi_cmd")
@@ -438,24 +443,6 @@ function get_chassis()
   device_info_data['chassis']="${chassis_table[((chassis_type - 1))]}"
 }
 
-# This function populates the img_size and img_type values from the
-# device_info_data variable.
-function get_img_info()
-{
-  local img_info
-  local img_size
-  local img_type
-
-  img_info=$(file "${configurations[qemu_path_image]}")
-  img_size=$(printf '%s\n' "$img_info" | sed -r 's/.*: .+, ([0-9]+) bytes/\1/')
-  img_type=$(printf '%s\n' "$img_info" | sed -r 's/.*: (.+),.+/\1/')
-
-  # The variable img_size stores the image size in bytes. It has to be converted
-  # to kB when we store it in the device_info_data variable.
-  device_info_data['img_size']=$(numfmt --to-unit=1000 "$img_size")
-  device_info_data['img_type']="$img_type"
-}
-
 # This function calls other functions to populate the device_info_data variable
 # with the data related to the hardware from the target machine.
 #
@@ -472,33 +459,15 @@ function learn_device()
   target=${target:-"${device_options['target']}"}
   ip=${ip:-"${device_options['ip']}"}
   port=${port:-"${device_options['port']}"}
-  if [[ "$target" == "$VM_TARGET" ]]; then
-    vm_mount > /dev/null
-    ret="$?"
-    if [[ "$ret" != 0 ]]; then
-      complain 'Please shut down or unmount your VM to continue.'
-      exit "$ret"
-    fi
-  fi
 
   get_ram "$target" "$flag"
   get_cpu "$target" "$flag"
   get_disk "$target" "$flag"
-  get_os "$target" "$ip" "$port"
+  get_os "$target" "$flag"
   get_desktop_environment "$target" "$ip" "$port"
   get_gpu "$target" "$flag"
   get_motherboard "$target" "$flag"
   get_chassis "$target" "$flag"
-
-  if [[ "$target" == "$VM_TARGET" ]]; then
-    vm_umount > /dev/null
-    ret="$?"
-    if [[ "$ret" != 0 ]]; then
-      complain 'We could not unmount your VM.'
-      exit "$ret"
-    fi
-    get_img_info
-  fi
 }
 
 # This function shows the information stored in the device_info_data variable.
@@ -509,11 +478,6 @@ function show_data()
   local port="${device_options['port']}"
 
   case "$target" in
-    1) # VM_TARGET
-      say 'Image:'
-      printf '  Type: %s\n' "${device_info_data['img_type']}"
-      printf '  Size: %s\n' "$(numfmt --from=si --to=iec "${device_info_data['img_size']}K")"
-      ;;
     3) # REMOTE_TARGET
       say 'IP:' "$ip" 'Port:' "$port"
       ;;
@@ -548,14 +512,18 @@ function show_data()
   printf '  Mounted on: %s\n' "${device_info_data['fs_mount']}"
 
   say 'Operating System:'
-  printf '  Distribution: %s\n' "${device_info_data['os']}"
+  printf '  Distribution: %s\n' "${device_info_data['os_name']}"
+  if [[ -n "${device_info_data['os_version']}" ]]; then
+    printf '  Distribution version: %s\n' "${device_info_data['os_version']}"
+  fi
+  if [[ -n "${device_info_data['os_id_like']}" ]]; then
+    printf '  Distribution base: %s\n' "${device_info_data['os_id_like']}"
+  fi
   printf '  Desktop environments: %s\n' "${device_info_data['desktop_environment']}"
 
-  if [[ "$target" != "$VM_TARGET" ]]; then
-    say 'Motherboard:'
-    printf '  Vendor: %s\n' "${device_info_data['motherboard_vendor']}"
-    printf '  Name: %s\n' "${device_info_data['motherboard_name']}"
-  fi
+  say 'Motherboard:'
+  printf '  Vendor: %s\n' "${device_info_data['motherboard_vendor']}"
+  printf '  Name: %s\n' "${device_info_data['motherboard_name']}"
 
   if [[ -n "${gpus[*]}" ]]; then
     say 'GPU:'
@@ -578,15 +546,12 @@ function device_info_parser()
   device_options['ip']="${configurations[ssh_ip]}"
   device_options['port']="${configurations[ssh_port]}"
 
-  if [[ -z "$option" && -n "${configurations[default_deploy_target]}" ]]; then
-    option='--'"${configurations[default_deploy_target]}"
+  if [[ -z "$option" && -n "${deploy_config[default_deploy_target]}" ]]; then
+    option='--'"${deploy_config[default_deploy_target]}"
   fi
   option=${option:-'--local'}
 
   case "$option" in
-    --vm)
-      device_options['target']="$VM_TARGET"
-      ;;
     --local)
       device_options['target']="$LOCAL_TARGET"
       ;;
@@ -618,6 +583,8 @@ function device_info_help()
   fi
   printf '%s\n' 'kw device:' \
     '  device [--local] - Retrieve information from this machine' \
-    '  device [--vm] - Retrieve information from a virtual machine' \
     '  device [--remote [<ip>:<port>]] - Retrieve information from a remote machine'
 }
+
+load_kworkflow_config
+load_deploy_config
